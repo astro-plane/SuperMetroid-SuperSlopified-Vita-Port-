@@ -182,9 +182,17 @@ uint64_t snesrecomp_host_now_ns(void) {
 #endif
 }
 
+#ifdef SNESRECOMP_LEAN_INTERP
+/* Vita: report-only tallies kept 32-bit (one load/add/store per opcode instead of two of each).
+ * The debug server widens them; they wrap after ~4 billion opcodes, which only affects that report. */
+static uint32_t s_interp816_insns;
+static uint32_t s_interp816_cycles;
+uint32_t s_interp816_opcodes_run = 0; /* dev perf: per-bridge-call opcode count */
+#else
 static uint64_t s_interp816_insns;
 static uint64_t s_interp816_cycles;
 uint64_t s_interp816_opcodes_run = 0; /* dev perf: per-bridge-call opcode count */
+#endif
 uint64_t interp816_insns_total(void)  { return s_interp816_insns; }
 uint64_t interp816_cycles_total(void) { return s_interp816_cycles; }
 
@@ -342,7 +350,8 @@ int interp816_runOpcode(Interp816* cpu) {
   interp816_doOpcode(cpu, opcode);
   OPCODE_HIST_END(opcode);
   s_interp816_insns++;
-  s_interp816_cycles += (uint64_t)cpu->cyclesUsed;
+  s_interp816_cycles += cpu->cyclesUsed;
+#ifndef SNESRECOMP_LEAN_INTERP   /* Vita: per-page tallies are report-only; two 64-bit adds into a 1 MB table per opcode */
   {
     /* Charge the page the OPCODE stood on (_pcb), not the post-execute PC,
      * so a branch or a jump is attributed to the routine that issued it. */
@@ -350,6 +359,7 @@ int interp816_runOpcode(Interp816* cpu) {
     s_interp_page_cycles[_pg] += (uint64_t)cpu->cyclesUsed;
     s_interp_page_insns[_pg]++;
   }
+#endif
 #ifdef SNES_COSIM
   { I816RingEnt* e = &g_i816_ring[g_i816_ring_head & (I816_RING_N - 1)];
     e->pc = _pcb; e->op = opcode; e->mf = _mf; e->xf = _xf;
@@ -2616,3 +2626,4 @@ static void interp816_doOpcode(Interp816* cpu, uint8_t opcode) {
     }
   }
 }
+

@@ -24,7 +24,7 @@ if(VITA)
     set(SM_VITA_TITLEID  "SMRC00001")
     # Build tag (rNN): the VPK name, the LiveArea app version (01.NN) and the
     # first line of log.txt. Bump it for every build handed out.
-    set(SM_VITA_BUILD "r21")
+    set(SM_VITA_BUILD "r27")
     string(REGEX REPLACE "^r0*" "" _sm_vita_n "${SM_VITA_BUILD}")
     if(_sm_vita_n STREQUAL "")
         set(_sm_vita_n 0)
@@ -294,7 +294,10 @@ elseif(VITA)
         SNESRECOMP_SDL3=0
         SDL_MAIN_HANDLED
         SNESRECOMP_VITA_DATA_DIR="${SM_VITA_DATA_DIR}"
-        SM_VITA_BUILD="${SM_VITA_BUILD}")
+        SM_VITA_BUILD="${SM_VITA_BUILD}"
+        SNESRECOMP_LEAN_INTERP=1)   # interpreter without report-only bookkeeping (interp816.c, interp_bridge.c)
+    # r26: log.txt is written by a background thread; game-code fflush(stderr) becomes a no-op (src/sm_vita.c)
+    target_link_options(SuperMetroidSNESRecomp PRIVATE -Wl,--wrap=fflush)
 else()
     snesrecomp_target_sdl(SuperMetroidSNESRecomp)
 endif()

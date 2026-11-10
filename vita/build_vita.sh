@@ -57,7 +57,7 @@ if [ -z "$ROM" ]; then
   [ -f "$CANONICAL" ] && ROM="$CANONICAL" || die "usage: $0 <path to your Super Metroid ROM>"
 fi
 [ -f "$ROM" ] || die "ROM not found: $ROM"
-sum="$(sha256sum "$ROM" | cut -d' ' -f1)"
+if command -v sha256sum >/dev/null; then sum="$(sha256sum "$ROM" | cut -d' ' -f1)"; else sum="$(shasum -a 256 "$ROM" | cut -d' ' -f1)"; fi   # macOS has shasum, not sha256sum
 [ "$sum" = "$EXPECTED_SHA256" ] || die "ROM checksum $sum is not the supported dump
        (Super Metroid (Japan, USA), unheadered, SHA-256 $EXPECTED_SHA256)."
 say "ROM verified"
@@ -84,12 +84,12 @@ cmake "${GEN[@]}" -S "$ROOT" -B "$BUILD" \
   -DVITA=ON \
   -DCMAKE_BUILD_TYPE=Release
 
-JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
+JOBS="${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 say "building with $JOBS jobs (the generated code is large; this takes a while)"
 cmake --build "$BUILD" -j "$JOBS"
 
-VPK="$BUILD/SuperMetroidRecomp.vpk"
-[ -f "$VPK" ] || die "build finished but $VPK is missing"
+VPK="$(ls -t "$BUILD"/*.vpk 2>/dev/null | head -1)"   # named after the build, e.g. SuperMetroid-Vita-r22.vpk
+[ -n "$VPK" ] && [ -f "$VPK" ] || die "build finished but no .vpk in $BUILD"
 say "done: $VPK"
 cat <<EOF
 
