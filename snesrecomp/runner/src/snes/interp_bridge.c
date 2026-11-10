@@ -151,15 +151,24 @@ static int bridge_apu_port_diag_enabled(void) {
  * The interpreter's `mem` is the CpuState*; route every access through the
  * same AOT HLE bus the compiled code uses, so the interpreter sees identical
  * WRAM / MMIO / SRAM / ROM. One memory map, zero divergence. */
-uint64_t g_interp_bridge_write_epoch;
-static uint64_t s_interp_continuous_read_epoch;
-static uint64_t s_interp_dynamic_progress_epoch;
+/* Vita: on (32-bit ARM) the bus-path counters are 32-bit -- each 64-bit increment is two
+ * loads, an add-with-carry pair and two stores on every guest memory access. The epochs are only ever compared
+ * for equality (a 2^32 wrap cannot alias within one detector window), and the bus-master sum is reset every
+ * instruction. Save states still store 64-bit values (the struct below is unchanged). */
+#ifdef SNESRECOMP_LEAN_INTERP
+typedef uint32_t bepoch_t;
+#else
+typedef uint64_t bepoch_t;
+#endif
+bepoch_t g_interp_bridge_write_epoch;
+static bepoch_t s_interp_continuous_read_epoch;
+static bepoch_t s_interp_dynamic_progress_epoch;
 /* Bumped by every read whose value can change while the CPU only reads: MMIO,
  * coprocessor windows, cartridge RAM a coprocessor shares, open bus. A read of
  * WRAM or ROM leaves it alone -- those change only through a CPU write, an
  * interrupt handler, or DMA. The stable-poll detector keys on it. */
-static uint64_t s_interp_volatile_read_epoch;
-static uint64_t s_interp_bus_master;
+static bepoch_t s_interp_volatile_read_epoch;
+static bepoch_t s_interp_bus_master;   /* per-instruction sum, reset every step */
 static unsigned s_interp_bus_cycles;
 static int s_interp_bus_timing_active;
 typedef struct BridgeDynamicValue { uint32_t address; uint8_t value, valid; } BridgeDynamicValue;
@@ -249,6 +258,16 @@ static uint8_t bridge_bus_read(void *mem, uint32_t adr) {
         cpu->open_bus = *rom;
         return *rom;
     }
+#ifdef SNESRECOMP_LEAN_INTERP
+    /* Vita: WRAM banks $7E/$7F. The general path below would charge 8 master
+     * clocks (cpu_region_speed), find the read stable and not continuous (no
+     * S-DD1 on this cart type), skip the APU flush and do cpu_read8 -- same
+     * effects, without the four classification calls. */
+    if (((adr >> 16) & 0xFEu) == 0x7Eu && !(g_snes && g_snes->cart && g_snes->cart->type == CART_SDD1)) {
+        if (s_interp_bus_timing_active) { s_interp_bus_cycles++; s_interp_bus_master += 8u; }
+        return cpu_read8(cpu, (uint8)((adr >> 16) & 0xff), (uint16)adr);
+    }
+#endif
     bridge_timing_bus(adr);
     if (!bridge_read_is_stable(adr)) s_interp_volatile_read_epoch++;
     int continuous=bridge_continuous_read(adr);
@@ -268,7 +287,7 @@ static uint8_t bridge_bus_read(void *mem, uint32_t adr) {
  * guest access: it must not count as a volatile read, or a shape check that
  * peeks below a bank's ROM window would disqualify the loop it is looking at. */
 static uint8_t bridge_peek8(CpuState *cpu, uint32_t adr) {
-    const uint64_t volatile_epoch = s_interp_volatile_read_epoch;
+    const bepoch_t volatile_epoch = s_interp_volatile_read_epoch;
     const uint8_t v = bridge_bus_read(cpu, adr);
     s_interp_volatile_read_epoch = volatile_epoch;
     return v;
@@ -1594,8 +1613,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         uint32_t pc;
         uint16_t a, x, y, sp, dp;
         uint8_t db, k, c, z, v, n, i, d, mf, xf, e;
-        uint64_t write_epoch;
-        uint64_t continuous_read_epoch;
+        bepoch_t write_epoch;
+        bepoch_t continuous_read_epoch;
         long step;
         unsigned repeats;
     } QuiescentState;
@@ -1607,8 +1626,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
         uint32_t pc;
         uint16_t a, x, y, sp, dp;
         uint8_t db, c, z, v, n, i, d, mf, xf, e;
-        uint64_t write_epoch;
-        uint64_t volatile_read_epoch;
+        bepoch_t write_epoch;
+        bepoch_t volatile_read_epoch;
         long step;
     } PollHeadState;
     PollHeadState poll_heads[4];
@@ -1617,8 +1636,8 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
 
     const long step_cap = interp_step_cap();
     long steps = 0;
-    uint64_t progress_write_epoch=g_interp_bridge_write_epoch;
-    uint64_t progress_dynamic_epoch=s_interp_dynamic_progress_epoch;
+    bepoch_t progress_write_epoch=g_interp_bridge_write_epoch;
+    bepoch_t progress_dynamic_epoch=s_interp_dynamic_progress_epoch;
     /* The pre-opcode poll-shape recognition below reads instruction bytes
      * only under an explicit cooperative scheduler, including its nested
      * fallbacks. Auto-quiescent schedulers use their own state-cycle detector.
@@ -2376,13 +2395,17 @@ static int _interp_run_core(CpuState *cpu, uint32_t entry_pc24,
                 &g_itrace_recent[g_itrace_recent_n++ & (ITRACE_RECENT_LEN - 1)];
             _g->pc = pc_before; _g->frame = snes_frame_counter;
             _g->sp = in.sp; _g->op = op; _g->pad = 0;
+#ifndef SNESRECOMP_LEAN_INTERP   /* Vita: the edge map is a diagnostic (8-entry fold search + fall-through decode per step) */
             if ((pc_before & 0xFFFFFFu) != edge_expect && itn > 1)
                 interp_edge_note(edge_from, pc_before,
                                  interp_edge_kind_for_op(edge_op), edge_op,
                                  in.sp);
+            edge_expect = interp_fallthrough_pc(pc_before, op, in.mf, in.xf);
+#else
+            (void)edge_expect;
+#endif
             edge_from = pc_before & 0xFFFFFFu;
             edge_op = op;
-            edge_expect = interp_fallthrough_pc(pc_before, op, in.mf, in.xf);
         }
         /* Env-gated diagnostic (SNESRECOMP_C2WATCH=1): log every interpreted
          * opcode in the menu-blit range $C2:FC40-$C2:FF00 with the live mode

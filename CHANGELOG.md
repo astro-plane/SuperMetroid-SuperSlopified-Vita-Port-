@@ -4,6 +4,34 @@ PS Vita port of [mstan's SuperMetroidRecomp](https://github.com/mstan/SuperMetro
 All credit for the recompilation, the framework and the widescreen renderer goes to the
 original authors — see [CREDITS.md](CREDITS.md).
 
+## r27 (SuperSlopified fork) — 2026-11-09
+
+Fork of DarthSully's r21 with Vita performance work. Build from source (see [SETUP.md](SETUP.md));
+macOS now works as a build host too.
+
+### Performance
+- **Leaner interpreter on the Vita.** Code that still runs in the 65816 interpreter skips the PC build's
+  report-only bookkeeping (per-page tallies, the edge map), reads WRAM through a direct fast path, and keeps
+  its hot bus-path counters 32-bit (one load/add/store each on the Vita's 32-bit CPU instead of two).
+  Gameplay went from ~58.7 to ~59.5 fps in profiled runs. The PC build is unchanged
+  (`SNESRECOMP_LEAN_INTERP`, Vita only).
+- **Steadier frame pacing.** The frame wait sleeps most of the time and spins the last ~2 ms: a Vita thread
+  sleep can wake several ms late when the cores are busy, which was the cause of 47-52 fps windows in which
+  the game thread was mostly idle. An empty `sleepwait` file in `ux0:data/SuperMetroidRecomp/` restores the
+  old sleep-only wait.
+
+### Fixes
+- **No more audio dropouts while profiling.** `log.txt` was flushed line by line, so a log line meant a
+  memory-card write on the thread that printed it (game thread included) — those writes can block for
+  20-80 ms. The log is now buffered and written by a low-priority background thread four times a second.
+  A crash can lose the last ~0.25 s of log; an empty `synclog` file restores line-buffered logging.
+- **Build script works on macOS** (`shasum` fallback for `sha256sum`, `sysctl` for the core count) and finds
+  the VPK by its real name.
+
+### Known issues
+- Power bombs and elevators can still crackle; the background APU thread runs at idle priority and is
+  starved in heavy frames. Setting `AudioSamples = 2048` in config.ini helps.
+
 ## r21 — 2026-10-27
 
 Download: [downloads/SuperMetroid-Vita-r21.vpk](downloads/SuperMetroid-Vita-r21.vpk)

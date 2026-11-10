@@ -87,6 +87,28 @@ void SmVita_EarlyInit(void) {
   SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
 }
 
+/* ---- background log flusher ---- */
+#include <pthread.h>
+#include <psp2/kernel/threadmgr.h>
+extern int __real_fflush(FILE *f);
+static volatile int s_log_async;
+int __wrap_fflush(FILE *f) {   /* -Wl,--wrap=fflush (CMakeLists.txt, Vita only) */
+  if (s_log_async && (f == stderr || f == stdout || f == NULL)) return 0;   /* the flusher thread writes it */
+  return __real_fflush(f);
+}
+static void *log_flusher_main(void *arg) {
+  (void)arg;
+  sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 | SCE_KERNEL_CPU_MASK_USER_1 | SCE_KERNEL_CPU_MASK_USER_2);
+  sceKernelChangeThreadPriority(sceKernelGetThreadId(), 190);   /* below the game, drawing and APU threads */
+  for (;;) { sceKernelDelayThread(250000); __real_fflush(stderr); }
+  return NULL;
+}
+static void SmVita_StartLogFlusher(void) {
+  pthread_t t; pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 16 * 1024);
+  if (pthread_create(&t, &a, log_flusher_main, NULL) == 0) s_log_async = 1;
+  pthread_attr_destroy(&a);
+}
+
 void SmVita_SeedDataDir(void) {
   /* sceIoMkdir is not recursive: ux0:data always exists, the title folder
    * and saves/ may not. */
@@ -102,7 +124,15 @@ void SmVita_SeedDataDir(void) {
    * buffered, so the last line before a hang or crash is on disk. */
   snprintf(path, sizeof(path), "%slog.txt", SNESRECOMP_VITA_DATA_DIR);
   if (freopen(path, "w", stderr)) {
-    setvbuf(stderr, NULL, _IOLBF, 0);
+    /* r26: log.txt was line-buffered, so every line meant a memory-card write on whichever thread printed it --
+     * the game thread included ([unwind] lines at doors, the profile's perf lines). A card write can block for
+     * 20-80 ms: the profile-mode audio dropout. Now: a 64 KB buffer, flushed four times a second by a
+     * low-priority thread on its own, and fflush(stderr) from game code is a no-op (fflush is wrapped at link
+     * time). A crash can lose the last ~0.25 s of log; "synclog" in the data folder restores line buffering. */
+    char sp[512]; snprintf(sp, sizeof(sp), "%ssynclog", SNESRECOMP_VITA_DATA_DIR);
+    FILE *sf = fopen(sp, "rb");
+    if (sf) { fclose(sf); setvbuf(stderr, NULL, _IOLBF, 0); }
+    else { static char logbuf[64 * 1024]; setvbuf(stderr, logbuf, _IOFBF, sizeof(logbuf)); SmVita_StartLogFlusher(); }
     stdout = stderr;
   }
   fprintf(stderr, "[vita] Super Metroid Recomp, Vita build %s\n", SM_VITA_BUILD);

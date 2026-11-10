@@ -385,11 +385,27 @@ static void PrintPerfWindow(unsigned frame) {
   s_steps = g_interp_bridge_steps; s_bounces = g_interp_bridge_bounces;
   s_window_start = now; s_window_frame = frame;
 }
+#ifdef __vita__
+/* Vita: a thread sleep can wake several ms late when the cores are busy; in profiled runs the slow windows
+ * (47-52 fps) spent 10-12 ms a frame here with the game thread idle. Sleep most of the wait, spin the last
+ * ~2 ms. An empty "sleepwait" file in the data folder restores the sleep-only wait. */
+static int g_wait_spin = -1;
+#endif
 static void WaitUntil(double deadline) {
   double profile_start = ProfileStart();
   /* Short deadline wait: a fixed 1ms sleep on every presentation-only
    * iteration unnecessarily overshoots near deadlines. */
   double now = MonotonicSeconds();
+#ifdef __vita__
+  if (g_wait_spin < 0) { FILE *f = fopen(SNESRECOMP_VITA_DATA_DIR "sleepwait", "rb"); g_wait_spin = f ? 0 : 1; if (f) fclose(f); }
+  if (g_wait_spin) {
+    while (now < deadline) {
+      double remaining_ms = (deadline - now) * 1000;
+      if (remaining_ms > 2.5) SDL_Delay((Uint32)(remaining_ms - 2.0));   /* sleep most of it ... */
+      now = MonotonicSeconds();                                          /* ... spin the last ~2 ms */
+    }
+  } else
+#endif
   while (now < deadline) {
     double remaining_ms = (deadline - now) * 1000;
     if (remaining_ms > 1.5)
