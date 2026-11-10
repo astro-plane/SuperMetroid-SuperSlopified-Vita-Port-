@@ -1,7 +1,8 @@
 # Super Metroid — PS Vita port (Slopified)
 
 > **SuperSlopified fork (r27):** DarthSully's Vita port plus performance work — a leaner interpreter, steadier
-> frame pacing, background log writing and a macOS-friendly build script. See the r27 entry in
+> frame pacing, background log writing and a macOS-friendly build script. Tip: 16:9 costs ~1.5 ms/frame more than
+> Fit — double-tap the left half of the touch screen to switch if a heavy room dips. See the r27 entry in
 > [CHANGELOG.md](CHANGELOG.md). No prebuilt VPK for r27 yet: build it from source with your own ROM
 > ([SETUP.md](SETUP.md)). Upstream: [DarthSully/SuperMetroid-Slopified-Vita-Port](https://github.com/DarthSully/SuperMetroid-Slopified-Vita-Port).
 

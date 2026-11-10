@@ -28,6 +28,12 @@ macOS now works as a build host too.
 - **Build script works on macOS** (`shasum` fallback for `sha256sum`, `sysctl` for the core count) and finds
   the VPK by its real name.
 
+### Tip: 16:9 vs Fit
+- **16:9 costs about 1.5 ms per frame** on the Vita (extra widescreen drawing and compositing) compared with
+  Fit (4:3). It holds 60 fps in normal play, but leaves little headroom in heavy rooms (lava, many enemies,
+  power bombs). If a spot dips, switch to Fit: double-tap the left half of the touch screen. The choice is
+  saved to `sm-video.ini`.
+
 ### Known issues
 - Power bombs and elevators can still crackle; the background APU thread runs at idle priority and is
   starved in heavy frames. Setting `AudioSamples = 2048` in config.ini helps.
