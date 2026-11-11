@@ -21,18 +21,21 @@ original authors — see [CREDITS.md](CREDITS.md).
 - Expected effect on the Vita: less CPU for the background sound thread (the
   `apu bg=` figure in the perf line), so it falls behind less often.
 
-### Sound thread on the system core (core 3)
-- With a capability-unlock plugin such as CapUnlocker installed, the background
-  sound thread now runs on the system core (core 3) at priority 160 instead of
-  scavenging idle time on cores 0-2. Core 3 sits at ~12-17% with only the OS on
-  it, leaving room for the SPC's 6-7 ms a frame.
-- Without the plugin the affinity call fails and the thread falls back to the
-  previous placement automatically (cores 0-2, idle priority). Nothing to set up.
-- In 16:9 the widescreen compositor also prefers core 3, so the two share it.
-- An empty `apu_no_core3` file in `ux0:data/SuperMetroidRecomp/` forces the old
-  placement. This replaces the `apu_old_affinity` switch.
-- `log.txt` now reports where both threads landed: `[apu] placement: ...` and
-  `[compose] placement: ...`.
+### Sound thread on its own user core (core 2)
+- The background sound thread is pinned to core 2 at priority 159, just above
+  the drawing worker that shares that core. Previously it scavenged idle time
+  on cores 0-2 at idle priority.
+- Tried and measured first: the system core (core 3, with CapUnlocker). The
+  thread's cost roughly doubled there (about 5 ms to 9-10 ms a frame) because
+  core 3 also carries the picture compositor and the kernel's own work, so it is
+  no longer the default. No plugin is needed for the new placement.
+- Empty files in `ux0:data/SuperMetroidRecomp/` select the other placements for
+  comparison: `apu_core3` (system core; needs the plugin) and `apu_idle` (the
+  r27 placement). These replace `apu_no_core3` and `apu_old_affinity`.
+- `log.txt` reports where the threads landed (`[apu] placement: ...`,
+  `[compose] placement: ...`), and each perf line now ends with
+  `audio[under= drop= minocc=]`: buffer underruns, samples dropped to a full
+  buffer, and the lowest buffer level the audio device found in that window.
 
 ## r27 (SuperSlopified fork) — 2026-11-09
 

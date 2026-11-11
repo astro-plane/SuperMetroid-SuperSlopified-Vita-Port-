@@ -9,6 +9,9 @@ int g_perf_on;
 double g_perf_ppu_s, g_perf_apu_s, g_perf_irq_s, g_perf_prep_s, g_perf_draw_s, g_perf_note_s;
 double g_perf_cwait_s, g_perf_ccopy_s;
 double g_perf_apu_bg_s, g_perf_dma_s, g_perf_apulock_s;
+/* Audio delivery health per perf window: starvation episodes, and the lowest
+ * ring occupancy the device callback found (natives; ~0 means on the edge). */
+unsigned g_perf_audio_underflows, g_perf_audio_min_occ = ~0u;
 #include "save_state_slots.h"
 #include "apu_frame_clock.h"
 #include "common_cpu_infra.h"
@@ -2036,37 +2039,39 @@ static void *rtl_apu_bg_main(void *arg) {
   __atomic_store_n(&s_apu_bg_pthread_set, 1, __ATOMIC_RELEASE);
 #ifdef __vita__
   SceUID tid = sceKernelGetThreadId();
-  /* Preferred placement: the system core (core 3), opened by a capability-unlock
-   * plugin such as CapUnlocker. There the SPC (6-7 ms a frame) gets a nearly-idle
-   * core to itself instead of fighting the game (core 0) and the 16:9 drawing
-   * threads (cores 1-2) for scraps; that contention is what starves it in heavy
-   * frames (power bombs, elevators) and causes the crackle. On its own core it no
-   * longer needs idle priority: priority 160 (below the OS audio/input threads
-   * that share core 3, which sit far above it) lets it keep up.
-   *   If the core is not available — no plugin — sceKernelChangeThreadCpuAffinityMask
-   * returns < 0 and we fall back to the previous placement: cores 0-2 at idle
-   * priority, filling the gaps the drawing leaves. A lagging SPC is caught up at
-   * the game's next port read (shown as lockw in the perf line).
-   *   An empty "apu_no_core3" file in the data folder forces that fallback even
-   * when the system core is open — for testing, or if core 3 ever disturbs the
-   * OS's own audio. */
+  /* Placement: core 2, just above the drawing worker that shares it.
+   *   Measured on hardware (r28 logs): at idle priority on cores 0-2 the SPC
+   * cost ~5 ms a frame but ran only in the gaps the game and drawing left;
+   * on the system core (core 3, CapUnlocker) the same work took 9-10 ms of
+   * wall time, because core 3 also carries the pipelined compose thread and
+   * the kernel's own work — worse, not better. Cores 1-2 only carry the line
+   * workers, which are busy a few ms a frame, so the SPC gets core 2 and wins
+   * it whenever it has work; worker 2 finishes its lines a little later, well
+   * inside the pipelined frame. A lagging SPC is still caught up at the game's
+   * next port read (lockw in the perf line).
+   *   Empty files in the data folder select the earlier placements for A/B
+   * tests: "apu_core3" (system core, priority 160; needs a core-unlock plugin)
+   * and "apu_idle" (cores 0-2 at idle priority). */
   {
-    bool force_fallback = false;
-    FILE *no3 = fopen(SNESRECOMP_VITA_DATA_DIR "apu_no_core3", "rb");
-    if (no3) { fclose(no3); force_fallback = true; }
-
-    if (!force_fallback &&
-        sceKernelChangeThreadCpuAffinityMask(tid, SCE_KERNEL_CPU_MASK_SYSTEM) >= 0) {
+    FILE *f;
+    bool want3 = false, want_idle = false;
+    if ((f = fopen(SNESRECOMP_VITA_DATA_DIR "apu_core3", "rb"))) { fclose(f); want3 = true; }
+    if ((f = fopen(SNESRECOMP_VITA_DATA_DIR "apu_idle", "rb"))) { fclose(f); want_idle = true; }
+    if (want3 && sceKernelChangeThreadCpuAffinityMask(tid, SCE_KERNEL_CPU_MASK_SYSTEM) >= 0) {
       sceKernelChangeThreadPriority(tid, 160);
-      fprintf(stderr, "[apu] placement: core 3 (system core) at priority %d\n",
+      fprintf(stderr, "[apu] placement: core 3 (system core) at priority %d (apu_core3)\n",
               sceKernelGetThreadCurrentPriority());
-    } else {
+    } else if (want_idle) {
       sceKernelChangeThreadCpuAffinityMask(tid, SCE_KERNEL_CPU_MASK_USER_0 |
           SCE_KERNEL_CPU_MASK_USER_1 | SCE_KERNEL_CPU_MASK_USER_2);
       sceKernelChangeThreadPriority(tid, 165);
-      fprintf(stderr, "[apu] placement: cores 0-2 at idle priority (%d)%s\n",
-              sceKernelGetThreadCurrentPriority(),
-              force_fallback ? " (apu_no_core3)" : " (no system core)");
+      fprintf(stderr, "[apu] placement: cores 0-2 at idle priority (%d) (apu_idle)\n",
+              sceKernelGetThreadCurrentPriority());
+    } else {
+      sceKernelChangeThreadCpuAffinityMask(tid, SCE_KERNEL_CPU_MASK_USER_2);
+      sceKernelChangeThreadPriority(tid, 159);
+      fprintf(stderr, "[apu] placement: core 2 at priority %d\n",
+              sceKernelGetThreadCurrentPriority());
     }
   }
 #endif
@@ -2531,6 +2536,8 @@ static void rtl_render_native(Dsp *dsp, int16 *out, int frames) {
     s_render_fade_pos = 0;
   }
 
+  if (available < g_perf_audio_min_occ) g_perf_audio_min_occ = available;
+
   /* Servo: steer ring occupancy toward the target cushion, on top of the fixed
    * native->device rate conversion. */
   if (s_render_occ_ema < 0.0) s_render_occ_ema = (double)available;
@@ -2613,6 +2620,7 @@ static void rtl_render_native(Dsp *dsp, int16 *out, int frames) {
     s_render_priming = true;
     s_render_phase = 0;
     s_render_fade_out = RTL_AUDIO_FADE_FRAMES;
+    ++g_perf_audio_underflows;
     audio_trace_on_output_underflow(available, (uint32_t)(frames - usable));
     rtl_render_wait(out + usable*2, frames - usable);
   }

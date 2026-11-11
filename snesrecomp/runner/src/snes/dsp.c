@@ -1,4 +1,5 @@
 
+unsigned g_perf_audio_drops;   /* samples lost to a full output ring (perf line) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -200,6 +201,7 @@ void dsp_cycle(Dsp* dsp) {
   // catch-up burst past 534 samples, which is the music-rate tick.
   uint32_t fill = dsp->sampleWrite - dsp->sampleRead;
   int dropped = fill >= DSP_SAMPLE_RING;
+  if (dropped) ++g_perf_audio_drops;
   if (!dropped) {
     uint32_t w = dsp->sampleWrite & (DSP_SAMPLE_RING - 1);
     dsp->sampleBuffer[w * 2] = totalL;
