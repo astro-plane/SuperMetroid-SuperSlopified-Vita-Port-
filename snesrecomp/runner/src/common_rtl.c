@@ -11,7 +11,7 @@ double g_perf_cwait_s, g_perf_ccopy_s;
 double g_perf_apu_bg_s, g_perf_dma_s, g_perf_apulock_s;
 /* Audio delivery health per perf window: starvation episodes, and the lowest
  * ring occupancy the device callback found (natives; ~0 means on the edge). */
-unsigned g_perf_audio_underflows, g_perf_audio_min_occ = ~0u;
+unsigned g_perf_audio_underflows, g_perf_audio_min_occ = ~0u, g_perf_audio_used;
 #include "save_state_slots.h"
 #include "apu_frame_clock.h"
 #include "common_cpu_infra.h"
@@ -2624,6 +2624,7 @@ static void rtl_render_native(Dsp *dsp, int16 *out, int frames) {
     double consumed_span = s_render_phase + (double)usable * ratio;
     uint32_t retire = (uint32_t)consumed_span;
     dsp_advance(dsp, retire);
+    g_perf_audio_used += retire;
     s_render_phase = consumed_span - (double)retire;
   }
 
@@ -2637,6 +2638,8 @@ static void rtl_render_native(Dsp *dsp, int16 *out, int frames) {
     s_render_phase = 0;
     s_render_fade_out = RTL_AUDIO_FADE_FRAMES;
     ++g_perf_audio_underflows;
+    fprintf(stderr, "[audio] underrun at frame %u: %u queued, %d short\n",
+            (unsigned)snes_frame_counter, available, frames - usable);
     audio_trace_on_output_underflow(available, (uint32_t)(frames - usable));
     rtl_render_wait(out + usable*2, frames - usable);
   }

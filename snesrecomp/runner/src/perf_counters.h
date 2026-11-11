@@ -14,7 +14,7 @@ extern double g_perf_cwait_s, g_perf_ccopy_s;
 extern double g_perf_apu_bg_s, g_perf_dma_s;
 /* Time threads other than the APU thread spent waiting for the APU lock. */
 extern double g_perf_apulock_s;
-extern unsigned g_perf_audio_underflows, g_perf_audio_min_occ, g_perf_audio_drops;
+extern unsigned g_perf_audio_underflows, g_perf_audio_min_occ, g_perf_audio_drops, g_perf_audio_made, g_perf_audio_used;
 static inline double perf_now(void) {
   struct timespec t;
   clock_gettime(CLOCK_MONOTONIC, &t);

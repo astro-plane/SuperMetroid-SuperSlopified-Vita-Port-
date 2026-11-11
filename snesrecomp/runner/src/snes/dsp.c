@@ -1,5 +1,5 @@
 
-unsigned g_perf_audio_drops;   /* samples lost to a full output ring (perf line) */
+unsigned g_perf_audio_drops, g_perf_audio_made;   /* samples lost to a full output ring (perf line) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -207,6 +207,7 @@ void dsp_cycle(Dsp* dsp) {
     dsp->sampleBuffer[w * 2] = totalL;
     dsp->sampleBuffer[w * 2 + 1] = totalR;
     dsp->sampleWrite++;
+    ++g_perf_audio_made;
   }
   audio_trace_on_sample((int16_t)totalL, (int16_t)totalR, dropped,
                         dropped ? fill : fill + 1);
