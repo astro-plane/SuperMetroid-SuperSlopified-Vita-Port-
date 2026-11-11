@@ -24,7 +24,7 @@ if(VITA)
     set(SM_VITA_TITLEID  "SMRC00001")
     # Build tag (rNN): the VPK name, the LiveArea app version (01.NN) and the
     # first line of log.txt. Bump it for every build handed out.
-    set(SM_VITA_BUILD "r27")
+    set(SM_VITA_BUILD "r28")
     string(REGEX REPLACE "^r0*" "" _sm_vita_n "${SM_VITA_BUILD}")
     if(_sm_vita_n STREQUAL "")
         set(_sm_vita_n 0)

@@ -4,6 +4,23 @@ PS Vita port of [mstan's SuperMetroidRecomp](https://github.com/mstan/SuperMetro
 All credit for the recompilation, the framework and the widescreen renderer goes to the
 original authors — see [CREDITS.md](CREDITS.md).
 
+## r28 (SuperSlopified fork) — 2026-11-10
+
+### Sound emulation: whole-instruction stepping
+- The SPC700/DSP emulator advanced one clock cycle per call (~17,000 calls a
+  frame), re-checking the port queue and counting down three timers each time,
+  although an instruction's work happens entirely at its first cycle.
+- `apu_runToGuestCycle` now steps a whole instruction at once when no CPU port
+  write is due within 24 cycles and the run target is at least that far away:
+  same opcode order, DSP samples at the same cycle numbers, timers advanced by
+  arithmetic. Anything closer uses the unchanged per-cycle path.
+- Verified bit-identical against the per-cycle path on the host: 40 randomized
+  programs with random port writes, comparing SPC state, timers, all 64 KB of
+  APU RAM and every output sample. `-DSNESRECOMP_APU_NO_BATCH` restores the old
+  behaviour.
+- Expected effect on the Vita: less CPU for the background sound thread (the
+  `apu bg=` figure in the perf line), so it falls behind less often.
+
 ## r27 (SuperSlopified fork) — 2026-11-09
 
 Fork of DarthSully's r21 with Vita performance work. Build from source (see [SETUP.md](SETUP.md));

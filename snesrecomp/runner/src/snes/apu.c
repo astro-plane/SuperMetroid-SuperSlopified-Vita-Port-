@@ -145,6 +145,36 @@ bool apu_runUntilPortQueueEmpty(Apu* apu, uint32_t max_cycles) {
   return true;
 }
 
+#define APU_BATCH_HORIZON 24u   /* longest SPC700 instruction is well under this many cycles */
+extern uint64_t g_apu_timer0_total_ticks;
+#if SNESRECOMP_SPC_DIAGNOSTICS
+extern uint64_t g_spc_pc_histogram[0x10000];
+#endif
+extern int g_spc_pc_max_seen;
+/* n cycles of the three timers; cycle for cycle the same as apu_cycle's loop. */
+static inline void apu_advanceTimers(Apu *apu, uint32_t n) {
+  for (int i = 0; i < 3; i++) {
+    Timer *t = &apu->timer[i];
+    uint32_t rem = n;
+    while (rem) {
+      if (t->cycles == 0) {
+        t->cycles = i == 2 ? 16 : 128;
+        if (t->enabled) {
+          t->divider++;
+          if (t->divider == t->target) {
+            t->divider = 0;
+            t->counter++;
+            t->counter &= 0xf;
+            if (i == 0) g_apu_timer0_total_ticks++;
+          }
+        }
+      }
+      uint32_t step = t->cycles < rem ? t->cycles : rem;
+      t->cycles = (uint8_t)(t->cycles - step);
+      rem -= step;
+    }
+  }
+}
 static bool apu_runToGuestCycleBody(Apu* apu, uint64_t guest_cycle, uint32_t max_cycles);
 bool apu_runToGuestCycle(Apu* apu, uint64_t guest_cycle,
                          uint32_t max_cycles) {
@@ -175,6 +205,49 @@ static bool apu_runToGuestCycleBody(Apu* apu, uint64_t guest_cycle,
       return true;
     if (max_cycles-- == 0)
       return false;
+#ifndef SNESRECOMP_APU_NO_BATCH
+    /* Whole-instruction step.  spc_runOpcode executes an instruction in full at
+     * its first cycle; the cycles after it only count down timers and emit a DSP
+     * sample every 32nd.  When no CPU port event can fall inside the instruction
+     * (none queued within APU_BATCH_HORIZON cycles) and the run target is at
+     * least that far away, do the same work in one step: identical opcode order,
+     * DSP samples at the same cycle numbers, timers advanced by arithmetic.
+     * Anything closer falls through to the per-cycle path below. */
+    if (apu->cpuCyclesLeft == 0 && !due_event &&
+        target - apu->portClock >= APU_BATCH_HORIZON && max_cycles >= APU_BATCH_HORIZON) {
+      bool ev_near = false;
+      if (apu->portQHead != apu->portQTail) {
+        const ApuPortWrite *w =
+            &apu->portQueue[apu->portQHead & (APU_PORT_QUEUE_LEN - 1)];
+        ev_near = w->target_cycle < apu->portClock + APU_BATCH_HORIZON;
+      }
+      if (!ev_near) {
+#if SNESRECOMP_SPC_DIAGNOSTICS
+        g_spc_pc_histogram[apu->spc->pc]++;
+        if (apu->spc->pc > g_spc_pc_max_seen) g_spc_pc_max_seen = apu->spc->pc;
+#endif
+        uint32_t n = (uint32_t)spc_runOpcode(apu->spc);
+        if (n == 0) n = 1;
+        if (n <= APU_BATCH_HORIZON) {
+          uint32_t c0 = apu->cycles;
+          for (uint32_t k = (c0 + 31u) & ~31u; k - c0 < n; k += 32u)
+            dsp_cycle(apu->dsp);
+          apu_advanceTimers(apu, n);
+          apu->cycles += n;
+          apu->portClock += n;
+          max_cycles -= n - 1;
+          continue;
+        }
+        /* (not reachable with real SPC700 timings) keep the cycle accounting */
+        apu->cpuCyclesLeft = (uint8_t)n;
+        apu->cpuCyclesLeft--;
+        if ((apu->cycles & 0x1f) == 0) dsp_cycle(apu->dsp);
+        apu_advanceTimers(apu, 1);
+        apu->cycles++; apu->portClock++;
+        continue;
+      }
+    }
+#endif
     apu_cycle(apu);
   }
 }
