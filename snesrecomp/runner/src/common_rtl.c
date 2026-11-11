@@ -2036,26 +2036,37 @@ static void *rtl_apu_bg_main(void *arg) {
   __atomic_store_n(&s_apu_bg_pthread_set, 1, __ATOMIC_RELEASE);
 #ifdef __vita__
   SceUID tid = sceKernelGetThreadId();
-  /* Idle-time SPC: any of the three cores, below every other thread. The
-   * 16:9 drawing threads own cores 1-2 and set the frame rate, while the
-   * game thread's core sits idle for several ms a frame waiting for them;
-   * the SPC (6-7 ms a frame) fills those gaps instead of competing with the
-   * drawing. A lagging SPC is caught up at the game's next port read (shown
-   * as lockw in the perf line). An empty "apu_old_affinity" file in the data
-   * folder restores the r17 placement (cores 1-2, normal priority). */
+  /* Preferred placement: the system core (core 3), opened by a capability-unlock
+   * plugin such as CapUnlocker. There the SPC (6-7 ms a frame) gets a nearly-idle
+   * core to itself instead of fighting the game (core 0) and the 16:9 drawing
+   * threads (cores 1-2) for scraps; that contention is what starves it in heavy
+   * frames (power bombs, elevators) and causes the crackle. On its own core it no
+   * longer needs idle priority: priority 160 (below the OS audio/input threads
+   * that share core 3, which sit far above it) lets it keep up.
+   *   If the core is not available — no plugin — sceKernelChangeThreadCpuAffinityMask
+   * returns < 0 and we fall back to the previous placement: cores 0-2 at idle
+   * priority, filling the gaps the drawing leaves. A lagging SPC is caught up at
+   * the game's next port read (shown as lockw in the perf line).
+   *   An empty "apu_no_core3" file in the data folder forces that fallback even
+   * when the system core is open — for testing, or if core 3 ever disturbs the
+   * OS's own audio. */
   {
-    FILE *old = fopen(SNESRECOMP_VITA_DATA_DIR "apu_old_affinity", "rb");
-    if (old) {
-      fclose(old);
-      if (sceKernelChangeThreadCpuAffinityMask(tid, SCE_KERNEL_CPU_MASK_SYSTEM) < 0)
-        sceKernelChangeThreadCpuAffinityMask(tid, SCE_KERNEL_CPU_MASK_USER_1 | SCE_KERNEL_CPU_MASK_USER_2);
-      fprintf(stderr, "[apu] placement: cores 1-2 (apu_old_affinity)\n");
+    bool force_fallback = false;
+    FILE *no3 = fopen(SNESRECOMP_VITA_DATA_DIR "apu_no_core3", "rb");
+    if (no3) { fclose(no3); force_fallback = true; }
+
+    if (!force_fallback &&
+        sceKernelChangeThreadCpuAffinityMask(tid, SCE_KERNEL_CPU_MASK_SYSTEM) >= 0) {
+      sceKernelChangeThreadPriority(tid, 160);
+      fprintf(stderr, "[apu] placement: core 3 (system core) at priority %d\n",
+              sceKernelGetThreadCurrentPriority());
     } else {
       sceKernelChangeThreadCpuAffinityMask(tid, SCE_KERNEL_CPU_MASK_USER_0 |
           SCE_KERNEL_CPU_MASK_USER_1 | SCE_KERNEL_CPU_MASK_USER_2);
       sceKernelChangeThreadPriority(tid, 165);
-      fprintf(stderr, "[apu] placement: cores 0-2 at idle priority (%d)\n",
-              sceKernelGetThreadCurrentPriority());
+      fprintf(stderr, "[apu] placement: cores 0-2 at idle priority (%d)%s\n",
+              sceKernelGetThreadCurrentPriority(),
+              force_fallback ? " (apu_no_core3)" : " (no system core)");
     }
   }
 #endif

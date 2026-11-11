@@ -21,6 +21,19 @@ original authors — see [CREDITS.md](CREDITS.md).
 - Expected effect on the Vita: less CPU for the background sound thread (the
   `apu bg=` figure in the perf line), so it falls behind less often.
 
+### Sound thread on the system core (core 3)
+- With a capability-unlock plugin such as CapUnlocker installed, the background
+  sound thread now runs on the system core (core 3) at priority 160 instead of
+  scavenging idle time on cores 0-2. Core 3 sits at ~12-17% with only the OS on
+  it, leaving room for the SPC's 6-7 ms a frame.
+- Without the plugin the affinity call fails and the thread falls back to the
+  previous placement automatically (cores 0-2, idle priority). Nothing to set up.
+- In 16:9 the widescreen compositor also prefers core 3, so the two share it.
+- An empty `apu_no_core3` file in `ux0:data/SuperMetroidRecomp/` forces the old
+  placement. This replaces the `apu_old_affinity` switch.
+- `log.txt` now reports where both threads landed: `[apu] placement: ...` and
+  `[compose] placement: ...`.
+
 ## r27 (SuperSlopified fork) — 2026-11-09
 
 Fork of DarthSully's r21 with Vita performance work. Build from source (see [SETUP.md](SETUP.md));

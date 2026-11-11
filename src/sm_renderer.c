@@ -338,8 +338,12 @@ static void *async_compose_main(void *arg) {
   (void)arg;
   /* Core 3 when a core-unlock plugin opens it, else cores 1-2 (core 0 keeps the guest). */
   SceUID tid = sceKernelGetThreadId();
-  if (sceKernelChangeThreadCpuAffinityMask(tid, SCE_KERNEL_CPU_MASK_SYSTEM) < 0)
+  if (sceKernelChangeThreadCpuAffinityMask(tid, SCE_KERNEL_CPU_MASK_SYSTEM) >= 0)
+    fprintf(stderr, "[compose] placement: core 3 (system core)\n");
+  else {
     sceKernelChangeThreadCpuAffinityMask(tid, SCE_KERNEL_CPU_MASK_USER_1 | SCE_KERNEL_CPU_MASK_USER_2);
+    fprintf(stderr, "[compose] placement: cores 1-2 (no system core)\n");
+  }
   for (;;) {
     g_sm_compose_stage = "waiting for a frame";
     sceKernelWaitSema(s_async_job_sema, 1, NULL);
