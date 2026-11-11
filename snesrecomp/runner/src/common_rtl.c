@@ -2023,6 +2023,9 @@ static bool s_apu_bg_frame_sync;   /* SNESRECOMP_APU_THREAD=2: tests only */
  * (and the audio callback) wait for the lock: 512 SPC cycles is ~0.5 ms of
  * SPC time, a fraction of that to emulate. */
 enum { kApuBgChunk = 512 };
+/* Ring level (natives) above which the background thread waits for the device
+ * to drain: twice the delivery cushion, about 133 ms, half the ring. */
+enum { kApuBgRingHigh = 2 * RTL_AUDIO_TARGET_NATIVES };
 #ifndef _WIN32
 #include <pthread.h>
 #ifdef __vita__
@@ -2083,7 +2086,20 @@ static void *rtl_apu_bg_main(void *arg) {
     g_apu_bg_stage = "running the SPC";
     uint32_t epoch = __atomic_load_n(&s_apu_bg_epoch, __ATOMIC_ACQUIRE);
     uint64_t target = __atomic_load_n(&s_apu_bg_target, __ATOMIC_ACQUIRE);
-    if (epoch == g_apu_epoch && target && g_apu_frame_time_valid && g_snes && g_snes->apu) {
+    /* Do not outrun the audio device. When the guest covers several frame
+     * periods of its own time in one burst (a room load, a lag frame: the host
+     * then waits out the difference), running straight to the target dumps
+     * all of that audio into the 8192-sample ring at once: it overflows
+     * (samples dropped) and then runs dry during the wait. Hardware logs showed
+     * exactly that pair, 7-9 thousand drops plus underruns per window, only in
+     * the windows with lag frames. Holding here while the ring is comfortably
+     * full spreads the same production over the wait. Still exact: the SPC
+     * only ever sees timestamped port writes, and a port read or a full write
+     * queue makes the game thread run the remainder itself. */
+    bool ring_full = g_snes && g_snes->apu &&
+        dsp_available(g_snes->apu->dsp) >= kApuBgRingHigh;
+    if (!ring_full &&
+        epoch == g_apu_epoch && target && g_apu_frame_time_valid && g_snes && g_snes->apu) {
       /* Bounded chunks keep the lock short for a waiting port read. */
       if (g_perf_on) {
         double t0 = perf_now();
