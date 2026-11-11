@@ -11,6 +11,7 @@ double g_perf_cwait_s, g_perf_ccopy_s;
 double g_perf_apu_bg_s, g_perf_dma_s, g_perf_apulock_s;
 /* Audio delivery health per perf window: starvation episodes, and the lowest
  * ring occupancy the device callback found (natives; ~0 means on the edge). */
+static double g_perf_frame_begin_s;   /* wall time the current guest frame began */
 unsigned g_perf_audio_underflows, g_perf_audio_min_occ = ~0u, g_perf_audio_used;
 #include "save_state_slots.h"
 #include "apu_frame_clock.h"
@@ -765,6 +766,7 @@ bool RtlRunFrame(uint32 inputs) {
   g_apu_frame_start_master = g_cpu.master_cycles;
   g_apu_frame_time_valid = true;
   rtl_apu_clock_begin(&g_apu_frame_clock, g_cpu.master_cycles);
+  g_perf_frame_begin_s = perf_now();
   WatchdogFrameStart();
   // Watchdog guard: WatchdogCheck() (called per-block in v2 gen) longjmps
   // here when a frame exceeds 5s, so an infinite loop in recompiled code
@@ -2638,8 +2640,25 @@ static void rtl_render_native(Dsp *dsp, int16 *out, int frames) {
     s_render_phase = 0;
     s_render_fade_out = RTL_AUDIO_FADE_FRAMES;
     ++g_perf_audio_underflows;
-    fprintf(stderr, "[audio] underrun at frame %u: %u queued, %d short\n",
-            (unsigned)snes_frame_counter, available, frames - usable);
+    {
+      /* Where everything stood: how long the current guest frame has been
+       * running in real time, how much guest time it has covered, and how far
+       * the SPC is behind the time the game last published (the callback holds
+       * the APU lock; the game-thread values are read racily, for a log). */
+      Apu *a = g_snes->apu;
+      uint64_t guest_now = rtl_apu_guest_cycle();
+      uint64_t pub = __atomic_load_n(&s_apu_bg_target, __ATOMIC_ACQUIRE);
+      long long spc_behind = a->portTimeValid && pub >= a->portGuestAnchor
+          ? (long long)(a->portTargetAnchor + (pub - a->portGuestAnchor)) - (long long)a->portClock : -1;
+      fprintf(stderr, "[audio] underrun at frame %u: %u queued, %d short | frame running %.0f ms real, "
+              "%.0f ms guest | spc behind published %.0f ms, published behind game %.0f ms, portq=%u\n",
+              (unsigned)snes_frame_counter, available, frames - usable,
+              (perf_now() - g_perf_frame_begin_s) * 1000,
+              (double)(guest_now - g_apu_frame_clock.start_guest) / 1024.0,
+              (double)spc_behind / 1024.0,
+              (double)((long long)guest_now - (long long)pub) / 1024.0,
+              apu_portQueueDepth(a));
+    }
     audio_trace_on_output_underflow(available, (uint32_t)(frames - usable));
     rtl_render_wait(out + usable*2, frames - usable);
   }
