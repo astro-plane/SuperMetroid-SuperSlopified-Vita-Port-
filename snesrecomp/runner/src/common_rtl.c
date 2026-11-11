@@ -2062,6 +2062,11 @@ static void *rtl_apu_bg_main(void *arg) {
     bool want3 = false, want_idle = false;
     if ((f = fopen(SNESRECOMP_VITA_DATA_DIR "apu_core3", "rb"))) { fclose(f); want3 = true; }
     if ((f = fopen(SNESRECOMP_VITA_DATA_DIR "apu_idle", "rb"))) { fclose(f); want_idle = true; }
+    { extern bool g_apu_no_batch;
+      if ((f = fopen(SNESRECOMP_VITA_DATA_DIR "apu_nobatch", "rb"))) {
+        fclose(f); g_apu_no_batch = true;
+        fprintf(stderr, "[apu] whole-instruction stepping: off (apu_nobatch)\n");
+      } }
     if (want3 && sceKernelChangeThreadCpuAffinityMask(tid, SCE_KERNEL_CPU_MASK_SYSTEM) >= 0) {
       sceKernelChangeThreadPriority(tid, 160);
       fprintf(stderr, "[apu] placement: core 3 (system core) at priority %d (apu_core3)\n",

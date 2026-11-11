@@ -355,6 +355,9 @@ static void ProfileEnd(unsigned stage, double start) {
 }
 /* SNESRECOMP_PERF=1: a per-window breakdown every 300 simulated frames,
  * printed live (a handheld app is killed, never reaching the exit summary). */
+#if !SNESRECOMP_SDL3
+static double g_perf_cb_gap_max, g_perf_cb_dur_max;
+#endif
 static void PrintPerfWindow(unsigned frame) {
   static double s_window_start;
   static unsigned s_window_frame;
@@ -367,7 +370,7 @@ static void PrintPerfWindow(unsigned frame) {
     double ppu = g_perf_ppu_s * 1000 / n, apu = g_perf_apu_s * 1000 / n;
     fprintf(stderr,
         "[perf] f=%u sim_fps=%.1f | ms/frame: guest=%.2f raster=%.2f (prep=%.2f draw=%.2f [irq=%.2f ppu=%.2f] note=%.2f) "
-        "apu(all)=%.2f [bg=%.2f lockw=%.2f] dma=%.2f compose=%.2f [wait=%.2f copy=%.2f] present=%.2f events=%.2f wait=%.2f | audio[under=%u drop=%u minocc=%d made=%u used=%u] slowest[guest=%.1f wait=%.1f present=%.1f] | interp_steps/f=%.0f aot_calls/f=%.0f\n",
+        "apu(all)=%.2f [bg=%.2f lockw=%.2f] dma=%.2f compose=%.2f [wait=%.2f copy=%.2f] present=%.2f events=%.2f wait=%.2f | audio[under=%u drop=%u minocc=%d made=%u used=%u cbgap=%.0f cbdur=%.1f] slowest[guest=%.1f wait=%.1f present=%.1f] | interp_steps/f=%.0f aot_calls/f=%.0f\n",
         frame, n / (now - s_window_start), guest, g_timings[kProfileRaster].total * 1000 / n,
         g_perf_prep_s * 1000 / n, g_perf_draw_s * 1000 / n, g_perf_irq_s * 1000 / n, ppu,
         g_perf_note_s * 1000 / n, apu, g_perf_apu_bg_s * 1000 / n, g_perf_apulock_s * 1000 / n, g_perf_dma_s * 1000 / n,
@@ -378,6 +381,11 @@ static void PrintPerfWindow(unsigned frame) {
         g_perf_audio_underflows, g_perf_audio_drops,
         g_perf_audio_min_occ == ~0u ? -1 : (int)g_perf_audio_min_occ,
         g_perf_audio_made, g_perf_audio_used,
+#if !SNESRECOMP_SDL3
+        g_perf_cb_gap_max * 1000, g_perf_cb_dur_max * 1000,
+#else
+        0.0, 0.0,
+#endif
         g_timings[kProfileGuest].maximum * 1000, g_timings[kProfileWait].maximum * 1000,
         g_timings[kProfilePresent].maximum * 1000,
         (double)(g_interp_bridge_steps - s_steps) / n, (double)(g_interp_bridge_bounces - s_bounces) / n);
@@ -389,6 +397,9 @@ static void PrintPerfWindow(unsigned frame) {
   g_perf_cwait_s = g_perf_ccopy_s = 0;
   g_perf_audio_underflows = g_perf_audio_drops = 0; g_perf_audio_min_occ = ~0u;
   g_perf_audio_made = g_perf_audio_used = 0;
+#if !SNESRECOMP_SDL3
+  g_perf_cb_gap_max = g_perf_cb_dur_max = 0;
+#endif
   for (unsigned i = 0; i < kProfileCount; ++i) g_timings[i].maximum = 0;
   s_steps = g_interp_bridge_steps; s_bounces = g_interp_bridge_bounces;
   s_window_start = now; s_window_frame = frame;
@@ -2262,9 +2273,19 @@ static void SDLCALL AudioStreamCallback(
   SDL_PutAudioStreamData(stream, g_audio_stream_buffer, additional_amount);
 }
 #else
+/* Device-side health for the perf line: the longest gap between two device
+ * callbacks and the longest one took (it waits for the APU lock). A callback
+ * that arrives or returns late starves the device even when the ring is full. */
+static double g_perf_cb_gap_max, g_perf_cb_dur_max;
 static void SDLCALL AudioCallback(void *userdata, Uint8 *stream, int len) {
   (void)userdata;
+  static double s_last;
+  double t0 = MonotonicSeconds();
+  if (s_last > 0 && t0 - s_last > g_perf_cb_gap_max) g_perf_cb_gap_max = t0 - s_last;
+  s_last = t0;
   FillAudioBuffer(stream, len);
+  double d = MonotonicSeconds() - t0;
+  if (d > g_perf_cb_dur_max) g_perf_cb_dur_max = d;
 }
 #endif
 

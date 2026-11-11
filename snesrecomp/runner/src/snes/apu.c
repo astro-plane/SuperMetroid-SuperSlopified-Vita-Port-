@@ -175,6 +175,8 @@ static inline void apu_advanceTimers(Apu *apu, uint32_t n) {
     }
   }
 }
+/* Runtime switch back to per-cycle stepping, for A/B listening tests. */
+bool g_apu_no_batch;
 static bool apu_runToGuestCycleBody(Apu* apu, uint64_t guest_cycle, uint32_t max_cycles);
 bool apu_runToGuestCycle(Apu* apu, uint64_t guest_cycle,
                          uint32_t max_cycles) {
@@ -213,7 +215,7 @@ static bool apu_runToGuestCycleBody(Apu* apu, uint64_t guest_cycle,
      * least that far away, do the same work in one step: identical opcode order,
      * DSP samples at the same cycle numbers, timers advanced by arithmetic.
      * Anything closer falls through to the per-cycle path below. */
-    if (apu->cpuCyclesLeft == 0 && !due_event &&
+    if (!g_apu_no_batch && apu->cpuCyclesLeft == 0 && !due_event &&
         target - apu->portClock >= APU_BATCH_HORIZON && max_cycles >= APU_BATCH_HORIZON) {
       bool ev_near = false;
       if (apu->portQHead != apu->portQTail) {
